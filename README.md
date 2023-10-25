@@ -1,1 +1,2 @@
-# Dialogue-IDP
+# Multi-modal retrival-augmented and generation(RAG) solution
+This repository houses a comprehensive toolkit leveraging Generative AI for multi-modal retrieval, augmentation, and generation (RAG), revolutionizing how we interact with documents containing text, tables and images. By seamlessly integrating state-of-the-art LLM and VLM models and task automation (i.e. Langchain, LlamaIndex) techniques, this solution  empowers users to extract, enhance, and generate multi-modality content with unprecedented precision and creativity. 
