@@ -18,7 +18,7 @@ import cv2
 module_path = ".."
 sys.path.append(os.path.abspath(module_path))
 from claude_bedrock import bedrock_textGen
-
+from utils.gemini_generative_models import _GenerativeModel as GenerativeModel
 
 st.set_page_config(page_title="Gemini Pro with Streamlit",page_icon="🩺")
 google_api_key = os.getenv("gemini_api_token")
@@ -222,7 +222,7 @@ with st.sidebar:
     #"[GitHub](https://github.com/cornelliusyudhawijaya)"
     
     st.divider()
-    st.header(':blue[Image Understanding] :camera:')
+    st.header(':green[Image Understanding] :camera:')
     upload_images = st.file_uploader("Upload your Images Here", accept_multiple_files=True, type=['jpg', 'png', 'pdf'])
     image_url = st.text_input("Or Input Image URL", key="image_url", type="default")
     if upload_images:
@@ -249,7 +249,7 @@ with st.sidebar:
         st.image(image2)
 
     st.divider()
-    st.header(':green[Video Understnding] :video_camera:')
+    st.header(':green[Video Understanding] :video_camera:')
     upload_video = st.file_uploader("Upload your video Here", accept_multiple_files=False, type=['mp4'])
     video_url = st.text_input("Or Input Video URL with mp4 type", key="video_url", type="default")
     if video_url:
@@ -263,7 +263,8 @@ with st.sidebar:
             f.write(video_bytes)
         st.video(video_bytes)
     st.divider()
-
+    st.header(':green[Multimodal RAG] :file_folder:')
+    upload_doc = st.file_uploader("Upload a file", accept_multiple_files=False, type=['pdf', 'xsl', 'doc'])
     st.divider()
     st.header(':green[Audio understanding] :microphone:')
     st.caption('Multilingual transcribe')
