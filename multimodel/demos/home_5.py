@@ -328,7 +328,7 @@ with st.sidebar:
     if doc_urls:
         docs, avg_doc_length = data_prep(doc_urls.split(","), chunk_size=chunk_size)
         update_vdb(docs, text_embedding, aoss_host, collection_name, profile_name, my_region)
-        print(f'Avg doc len: {avg_doc_length}')
+        #print(f'Avg doc len: {avg_doc_length}')
     rag_on = st.toggle('Activate RAG retrival')
 
     #st.divider()
@@ -490,7 +490,7 @@ elif rag_on:
             text_embedding =  OpenAIEmbeddings(openai_api_key=os.getenv('openai_api_token'))
         elif text_embedding_option == 'hf-tei':
              ext_embedding = HuggingFaceHubEmbeddings(model='http://infs.cavatar.info:8084')
-
+        #print(f'RAG:{prompt}, model to use:{option}')
         msg = do_query(prompt, option, text_embedding, aoss_host, collection_name, profile_name, max_token, temperature, top_p, top_k, my_region)
         st.session_state.chat = genai.GenerativeModel(option).start_chat(history=[])
         st.session_state.messages.append({"role": "assistant", "content": msg})

@@ -19,8 +19,8 @@ from urllib.request import urlretrieve
 from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
 #from langchain.vectorstores import OpenSearchVectorSearch
 from langchain_community.vectorstores import OpenSearchVectorSearch
-from langchain.chains import RetrievalQA
-from langchain.chains import RetrievalQAWithSourcesChain
+from langchain.chains import (RetrievalQA, ConversationalRetrievalChain, RetrievalQAWithSourcesChain)
+from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
 import numpy as np
 from langchain.text_splitter import CharacterTextSplitter, RecursiveCharacterTextSplitter
@@ -32,6 +32,9 @@ import requests
 from langchain_core.embeddings import Embeddings
 from pydantic import BaseModel
 import shutil
+# Re-Rank
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import CohereRerank
 
 
 module_path = ".."
@@ -47,7 +50,6 @@ os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
 my_region = os.environ.get("AWS_DEFAULT_REGION", None)
 credentials = boto3.Session(profile_name='default').get_credentials()
 auth = AWSV4SignerAuth(credentials, my_region, 'aoss')
-
 
 
 def is_url(string):
@@ -293,7 +295,7 @@ def do_query(query: str, model_id: str, text_embedding, aoss_host:str, collectio
             Question: {question}
             Assistant:"""
     elif model_id == 'amazon.titan-text-express-v1':
-        llm = Bedrock(
+        llm = BedrockChat(
              model_id=model_id, client=boto3_bedrock, model_kwargs={"maxTokenCount":max_token, "temperature":temperature, "top_p": top_p}
         )
     elif model_id == 'gpt-4-1106-preview':
@@ -312,21 +314,47 @@ def do_query(query: str, model_id: str, text_embedding, aoss_host:str, collectio
         Answer: """
 
     PROMPT = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    qa_with_sources = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=vectordb.as_retriever(search_kwargs={'k': 3}),return_source_documents=True)
+    
     search_kwargs = {
             #"vector_field": "content-embedding",
             #"text_field": "content",
             "k": 3}
-    qa_prompt = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=vectordb.as_retriever(search_kwargs=search_kwargs),
-        return_source_documents=True,
-        chain_type_kwargs={"prompt": PROMPT, "verbose": False},
-        verbose=False
+    base_retrieval = vectordb.as_retriever(search_type="similarity", search_kwargs=search_kwargs)
+    # Re-Rank
+    compressor = CohereRerank(cohere_api_key=os.getenv('cohere_api_token'))
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor, base_retriever=base_retrieval
     )
-    result = qa_prompt({"query": query})
-    return result["result"]
+
+    #Retrieval
+    if model_id == 'gemini-pro':
+        qa_prompt = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=vectordb.as_retriever(search_kwargs=search_kwargs),
+            return_source_documents=True,
+            chain_type_kwargs={"prompt": PROMPT, "verbose": False},
+            verbose=False
+        )
+        result = qa_prompt({"query": query})
+        return result['result']
+  
+    else:
+        # Conversational retrieval
+        cqa_prompt = ConversationalRetrievalChain.from_llm(llm = llm, 
+                                                           chain_type = "stuff",
+                                                           condense_question_llm = llm,
+                                                           retriever= base_retrieval,
+                                                           return_source_documents = True,
+                                                           memory = ConversationBufferMemory(input_key = "question",
+                                                                                  output_key = "answer",
+                                                                                  memory_key = "chat_history",
+                                                                                  return_messages = True),
+                                                           verbose = False) 
+        #chat_history = []
+        result = cqa_prompt.invoke({"context": compression_retriever, "question": query})#, "chat_history": chat_history})
+        return result['answer']
+
 
 def main():
     parser = argparse.ArgumentParser(description='Process command line input')
@@ -394,7 +422,6 @@ def main():
         
         response = do_query(query, model_id, text_embedding, aoss_host, collection_name, profile_name, max_token, temperature, top_p, top_k, my_region)
         print(response)
-'''
+
 if __name__ == "__main__":
     main()
-'''
