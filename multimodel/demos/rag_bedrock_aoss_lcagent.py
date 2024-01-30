@@ -263,9 +263,8 @@ def update_vdb(new_docs, text_embedding, aoss_host, index_name, profile_name, my
     )
     vector.add_documents(
         documents = new_docs,
-        vector_field = "osha_vector"
+        #vector_field = "osha_vector"
     )
-
     return True
 
 #-----------------

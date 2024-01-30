@@ -299,7 +299,48 @@ def get_asr(audio_filename):
     response = requests.post(url, headers=headers, files=files)
     return response.text
 
-def mistral_textGen(option, prompt, max_token, temperature, top_p, top_k):
+# ++++++++++++++ Local deployed models with TGI>=1.4 ++++++++++++++++++++++
+    
+    
+def tgi_imageGen(option, prompt, max_token, temperature, top_p, top_k):
+    headers = {
+        'accept': 'application/json',
+        'Content-Type': 'application/json',
+    }
+    #print(prompt)
+    data = {
+        "inputs": prompt,
+        "parameters": {
+            "best_of": 1,
+            "decoder_input_details": True,
+            "details": True,
+            "do_sample": True,
+            "max_new_tokens": max_token,
+            "repetition_penalty": 1.05,
+            "return_full_text": False,
+            "seed": 42,
+            "stop": ["photographer"],
+            "temperature": temperature,
+            "top_k": top_k,
+            "top_n_tokens": None,
+            "top_p": top_p,
+            "truncate": None,
+            "streaming":True,
+            "watermark": True
+        }
+    }
+
+    response = requests.post(option, headers=headers, data=json.dumps(data))
+    if response.status_code == 200:
+        result = response.json()
+        output = result.get('generated_text')
+        return output.lstrip()
+    else:
+        print(f"Error: {response.status_code}")
+        return None
+
+
+def tgi_textGen(option, prompt, max_token, temperature, top_p, top_k):
     llm = HuggingFaceTextGenInference(
         inference_server_url=option,
         max_new_tokens=max_token,
@@ -321,7 +362,7 @@ def mistral_textGen(option, prompt, max_token, temperature, top_p, top_k):
     chain = c_prompt | llm | output_parser
     return chain.invoke({"input": prompt})
 
-def mistral_textGen_agent(option, text_embedding_model, prompt, max_token, temperature, top_p, top_k):
+def tgi_textGen_agent(option, text_embedding_model, prompt, max_token, temperature, top_p, top_k):
     tgi_llm = HuggingFaceTextGenInference(
         inference_server_url=option,
         max_new_tokens=max_token,
@@ -432,7 +473,7 @@ if not check_password():
 
 with st.sidebar:
     st.title(':orange[Multimodal Config] :pencil2:')
-    option = st.selectbox('Choose Model',('anthropic.claude-v2:1', 'mistral-7b', 'gemini-pro', 'gemini-pro-vision', 'gpt-4-1106-preview', 'gpt-4-vision-preview', 'stability.stable-diffusion-xl-v1:0', 'amazon.titan-image-generator-v1'))
+    option = st.selectbox('Choose Model',('anthropic.claude-v2:1', 'mistral-7b', 'llava-v1.5-13b-vision', 'gemini-pro', 'gemini-pro-vision', 'gpt-4-1106-preview', 'gpt-4-vision-preview', 'stability.stable-diffusion-xl-v1:0', 'amazon.titan-image-generator-v1'))
 
     if 'model' not in st.session_state or st.session_state.model != option:
         st.session_state.chat = genai.GenerativeModel(option).start_chat(history=[])
@@ -574,7 +615,7 @@ for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
 if upload_images or image_url:
-    if option != "gemini-pro-vision" and option != "gpt-4-vision-preview":
+    if option != "gemini-pro-vision" and option != "gpt-4-vision-preview" and option != 'llava-v1.5-13b-vision' and option != 'amazon.titan-image-generator-v1':
         st.info("Please switch to a vision model")
         st.stop()
     if prompt := st.chat_input(placeholder=voice_prompt, on_submit=None, key="user_input"):
@@ -590,21 +631,34 @@ if upload_images or image_url:
                 response.resolve()
                 msg=response.text
                 my_avatar="✧"
+            elif option == 'llava-v1.5-13b-vision':
+                image_prompt = f'({image_url}) {prompt}'
+                msg=tgi_imageGen('http://infs.cavatar.info:8085/generate', image_prompt, max_token, temperature, top_p, top_k)
+                my_avatar="🦙"
             elif option == "gpt-4-vision-preview":
                 msg = getDescription(option, prompt, image, max_token, temperature, top_p)
                 my_avatar="🛟"
                 if upload_image2:
                      msg = getDescription2(option, prompt, image, image2, max_token, temperature, top_p)
+            elif option == "amazon.titan-image-generator-v1" or option == "stability.stable-diffusion-xl-v1:0":
+                src_image = image if 'image' in locals() else None
+                base64_str = bedrock_imageGen(option, prompt, iheight=1024, iwidth=1024, src_image=src_image)
+                image = Image.open(io.BytesIO(base64.decodebytes(bytes(base64_str, "utf-8"))))
+                st.image(image,use_column_width='auto')
+                msg = ' '
+                my_avatar="🌈"
+            else:
+                msg = "Please choose a correct model."
+            msg += "\n\n✒︎Content created by using: " + option
             st.session_state.chat = genai.GenerativeModel(option).start_chat(history=[])
             st.session_state.messages.append({"role": "assistant", "content": msg})
             
             st.image(image,width=350)
             if upload_image2:
                 st.image(image2,width=350)
-            msg += "\n\nContent created by using: " + option
             st.chat_message("assistant").write(msg)
 elif upload_video or video_url:
-    if option != "gemini-pro-vision" and option != "gpt-4-vision-preview":
+    if option != "gemini-pro-vision" and option != "gpt-4-vision-preview" and option != 'llava-v1.5-13b-vision':
         st.info("Please switch to a vision model")
         st.stop()
     if prompt := st.chat_input():
@@ -622,7 +676,11 @@ elif upload_video or video_url:
             elif option == "gpt-4-vision-preview":
                 msg = videoCaptioning(option, prompt, getBase64Frames(video_file_name), max_token, temperature, top_p)
                 my_avatar="🛟"
-            msg += "\n\nContent created by using: " + option
+            elif option == 'llava-v1.5-13b-vision':
+                image_prompt = f'({image_url}){prompt}'
+                msg=tgi_imageGen('http://infs.cavatar.info:8085/generate', image_prompt, max_token, temperature, top_p, top_k)
+                my_avatar="🦙"
+            msg += "\n\n✒︎Content created by using: " + option
             st.session_state.chat = genai.GenerativeModel(option).start_chat(history=[])
             st.session_state.messages.append({"role": "assistant", "content": msg})
 
@@ -631,7 +689,7 @@ elif upload_video or video_url:
             st.video(video_bytes, start_time=0)
             st.chat_message("assistant", avatar=my_avatar).write(msg)
 elif rag_on:
-    if option == "gemini-pro-vision" or option == "gpt-4-vision-preview" or option == "stability.stable-diffusion-xl-v1:0" or option == "amazon.titan-image-generator-v1":
+    if option == "gemini-pro-vision" or option == "gpt-4-vision-preview" or option == "llava-v1.5-13b-vision":
         st.info("Please switch to a text model")
         st.stop()
     if prompt := st.chat_input(placeholder=voice_prompt, on_submit=None, key="user_input"):
@@ -647,8 +705,8 @@ elif rag_on:
              ext_embedding = HuggingFaceHubEmbeddings(model='http://infs.cavatar.info:8084')
 
         #print(f'RAG:{prompt}, model to use:{option}')
-        msg = do_query(prompt, option, text_embedding, aoss_host, collection_name, profile_name, max_token, temperature, top_p, top_k, my_region)
-        msg += "\n\nContent created by using: " + option
+        msg = do_query(prompt, option, text_embedding, aoss_host, collection_name, profile_name, max_token, temperature, top_p, top_k, my_region)           
+        msg += "\n\n✒︎Content created by using: " + option
         st.session_state.chat = genai.GenerativeModel(option).start_chat(history=[])
         st.session_state.messages.append({"role": "assistant", "content": msg})
         st.chat_message("ai", avatar="📄").write(msg)
@@ -670,18 +728,22 @@ elif record_audio:
             my_avatar="🛟"
             msg=textGen(option, prompt, max_token, temperature, top_p)
         elif option == "mistral-7b":
-            msg=mistral_textGen('http://infs.cavatar.info:8080', prompt, max_token, temperature, top_p, top_k)
+            msg=tgi_textGen('http://infs.cavatar.info:8080', prompt, max_token, temperature, top_p, top_k)
             my_avatar="🏄‍♂️"
+        elif option == 'llava-v1.5-13b-vision':
+            msg=tgi_textGen('http://infs.cavatar.info:8085', prompt, max_token, temperature, top_p, top_k)
+            my_avatar="🦙"
         elif option == "amazon.titan-image-generator-v1" or option == "stability.stable-diffusion-xl-v1:0":
-                base64_str = bedrock_imageGen(option, prompt, iheight=1024, iwidth=1024)
-                image = Image.open(io.BytesIO(base64.decodebytes(bytes(base64_str, "utf-8"))))
-                st.image(image,use_column_width='auto')
-                msg = ' '
-                my_avatar="🌈"
+            src_image = image if 'image' in locals() else None
+            base64_str = bedrock_imageGen(option, prompt, iheight=1024, iwidth=1024, src_image=src_image)
+            image = Image.open(io.BytesIO(base64.decodebytes(bytes(base64_str, "utf-8"))))
+            st.image(image,use_column_width='auto')
+            msg = ' '
+            my_avatar="🌈"
         else:
-                msg = "Please choose a correct model."
-                my_avatar="😇"
-        msg += "\n\nContent created by using: " + option
+            msg = "Please choose a correct model."
+            my_avatar="😇"
+        msg += "\n\n✒︎Content created by using: " + option
         st.session_state.messages.append({"role": "assistant", "content": msg})
         st.chat_message("ai", avatar=my_avatar).write(msg)
 
@@ -701,10 +763,14 @@ else:
                 msg=bedrock_textGen(option, prompt, max_token, temperature, top_p, top_k, stop_sequences)
                 my_avatar="⚓️"
             elif option == "mistral-7b":
-                msg=mistral_textGen('http://infs.cavatar.info:8080', prompt, max_token, temperature, top_p, top_k)
+                msg=tgi_textGen('http://infs.cavatar.info:8080', prompt, max_token, temperature, top_p, top_k)
                 my_avatar="🏄‍♂️"
+            elif option == 'llava-v1.5-13b-vision':
+                msg=tgi_textGen('http://infs.cavatar.info:8085', prompt, max_token, temperature, top_p, top_k)
+                my_avatar="🦙"
             elif option == "amazon.titan-image-generator-v1" or option == "stability.stable-diffusion-xl-v1:0":
-                base64_str = bedrock_imageGen(option, prompt, iheight=1024, iwidth=1024)
+                src_image = image if 'image' in locals() else None
+                base64_str = bedrock_imageGen(option, prompt, iheight=1024, iwidth=1024, src_image=src_image)
                 image = Image.open(io.BytesIO(base64.decodebytes(bytes(base64_str, "utf-8"))))
                 st.image(image,use_column_width='auto')
                 my_avatar="🌈"
@@ -712,6 +778,6 @@ else:
             else:
                 msg = "Please choose a correct model."
                 my_avatar="😇"
-            msg += "\n\nContent created by using: " + option
+            msg += "\n\n ✒︎Content created by using: " + option
             st.session_state.messages.append({"role": "assistant", "content": msg})
             st.chat_message("ai", avatar=my_avatar).write(msg)
