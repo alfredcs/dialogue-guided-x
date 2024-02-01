@@ -13,6 +13,12 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from PIL import Image
 from botocore.exceptions import ClientError
+# Langchian agent
+from langchain.tools import DuckDuckGoSearchRun
+from langchain.tools import DuckDuckGoSearchResults
+from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
+from langchain_community.chat_models import BedrockChat
+from langchain.agents import initialize_agent, AgentType
 
 module_path = ".."
 sys.path.append(os.path.abspath(module_path))
@@ -46,7 +52,7 @@ def image_to_base64(img) -> str:
     else:
         raise ValueError(f"Expected str (filename) or PIL Image. Got {type(img)}")
 
-def bedrock_imageGen(model_id:str, prompt:str, iheight:int, iwidth:int, src_image):
+def bedrock_imageGen(model_id:str, prompt:str, iheight:int, iwidth:int, src_image, image_quality:str, image_n:int, cfg:float, seed:int):
     negative_prompts = [
                 "poorly rendered",
                 "poor background details",
@@ -59,6 +65,8 @@ def bedrock_imageGen(model_id:str, prompt:str, iheight:int, iwidth:int, src_imag
     titan_negative_prompts = ','.join(negative_prompts)
     try:
         if model_id == "amazon.titan-image-generator-v1":
+            if cfg > 10.0:
+               cfg = 10.0
             if src_image:
                 src_img_b64 = image_to_base64(src_image)
                 body = json.dumps(
@@ -70,12 +78,12 @@ def bedrock_imageGen(model_id:str, prompt:str, iheight:int, iwidth:int, src_imag
                             "images": [src_img_b64]
                         },
                         "imageGenerationConfig": {
-                            "numberOfImages": 1,   # Range: 1 to 5 
-                            "quality": "premium",  # Options: standard or premium
+                            "numberOfImages": image_n,   # Range: 1 to 5 
+                            "quality": image_quality,  # Options: standard or premium
                             "height": iheight,         # Supported height list in the docs 
                             "width": iwidth,         # Supported width list in the docs
-                            "cfgScale": 7.5,       # Range: 1.0 (exclusive) to 10.0
-                            "seed": 42             # Range: 0 to 214783647
+                            "cfgScale": cfg,       # Range: 1.0 (exclusive) to 10.0
+                            "seed": seed             # Range: 0 to 214783647
                         }
                     }
                 )
@@ -88,12 +96,12 @@ def bedrock_imageGen(model_id:str, prompt:str, iheight:int, iwidth:int, src_imag
                             "negativeText": titan_negative_prompts  # Optional
                         },
                         "imageGenerationConfig": {
-                            "numberOfImages": 1,   # Range: 1 to 5 
-                            "quality": "premium",  # Options: standard or premium
+                            "numberOfImages": image_n,   # Range: 1 to 5 
+                            "quality": image_quality,  # Options: standard or premium
                             "height": iheight,         # Supported height list in the docs 
                             "width": iwidth,         # Supported width list in the docs
-                            "cfgScale": 7.5,       # Range: 1.0 (exclusive) to 10.0
-                            "seed": 42             # Range: 0 to 214783647
+                            "cfgScale": cfg,       # Range: 1.0 (exclusive) to 10.0
+                            "seed": seed             # Range: 0 to 214783647
                         }
                     }
                 )
@@ -106,8 +114,8 @@ def bedrock_imageGen(model_id:str, prompt:str, iheight:int, iwidth:int, src_imag
                         [{"text": prompt, "weight": 1.0}]
                         + [{"text": negprompt, "weight": -1.0} for negprompt in negative_prompts]
                     ),
-                    "cfg_scale": 5,
-                    "seed": 452345,
+                    "cfg_scale": cfg,
+                    "seed": seed,
                     "steps": 60,
                     "style_preset": style_preset,
                     "clip_guidance_preset": clip_guidance_preset,
@@ -148,8 +156,44 @@ def bedrock_textGen(model_id, prompt, max_tokens, temperature, top_p, top_k, sto
         client=boto3_bedrock,
         model_kwargs=inference_modifier,
     )
-
+    
     return textgen_llm(prompt)
+
+def bedrock_textGen_agent(model_id, prompt, max_tokens, temperature, top_p, top_k, stop_sequences):
+    stop_sequence = [stop_sequences]
+    inference_modifier = {
+        "max_tokens_to_sample": max_tokens,
+        "temperature": temperature,
+        "top_k": top_k,
+        "top_p": top_p,
+        "stop_sequences": stop_sequence,
+    }
+
+    textgen_llm = Bedrock(
+        model_id=model_id,
+        client=boto3_bedrock,
+        model_kwargs=inference_modifier,
+    )
+    
+    ## Using Dickduckgo as search engine
+    wrapper = DuckDuckGoSearchAPIWrapper(region="wt-wt", safesearch='Moderate', time=None, max_results=3)
+    duckduckgo_search = DuckDuckGoSearchRun()
+    duckduckgo_tool = DuckDuckGoSearchResults()
+
+    # initialize the agent
+    agent_chain = initialize_agent(
+        [duckduckgo_tool],
+        textgen_llm,
+        agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
+        verbose=True,
+    )
+
+    # run the agent
+    output = agent_chain.run(
+        prompt,
+    )
+    
+    return output
 
 def create_vector_db_chroma_index(bedrock_clinet, chroma_db_path: str, pdf_file_names: str, bedrock_embedding_model_id:str):
     #replace the document path here for pdf ingestion
