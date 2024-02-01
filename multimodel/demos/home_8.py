@@ -40,11 +40,15 @@ from langchain.prompts.chat import (
     MessagesPlaceholder,
 )
 from langchain.schema import SystemMessage
+from langchain.tools import DuckDuckGoSearchRun
+from langchain.tools import DuckDuckGoSearchResults
+from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
+from langchain.agents import initialize_agent, AgentType
 
 
 module_path = ".."
 sys.path.append(os.path.abspath(module_path))
-from claude_bedrock import bedrock_textGen, bedrock_llm, bedrock_imageGen
+from claude_bedrock import bedrock_textGen, bedrock_llm, bedrock_imageGen, bedrock_textGen_agent
 from utils.gemini_generative_models import _GenerativeModel as GenerativeModel
 from utils.gemini_generative_models import Part 
 
@@ -115,6 +119,31 @@ def textGen(model_name, prompt, max_output_tokens, temperature, top_p):
         top_p=top_p,
     )
     return response.choices[0].message.content
+
+def textGen_agent(model_name, prompt, max_output_tokens, temperature, top_p):
+    model = ChatOpenAI(model_name=model_name, 
+                       max_tokens=max_output_tokens,
+                       temperature=temperature,
+                       top_p=top_p,
+                      )
+    ## Using Dickduckgo as search engine
+    wrapper = DuckDuckGoSearchAPIWrapper(region="wt-wt", safesearch='Moderate', time=None, max_results=3)
+    duckduckgo_search = DuckDuckGoSearchRun()
+    duckduckgo_tool = DuckDuckGoSearchResults()
+
+    # initialize the agent
+    agent_chain = initialize_agent(
+        [duckduckgo_tool],
+        model,
+        agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
+        verbose=True,
+    )
+
+    # run the agent
+    output = agent_chain.run(
+        prompt,
+    )
+    return output
 
 def compose_payload(model_name: str, images, prompt: str, max_output_tokens, temperature) -> dict:
     text_content = {
@@ -297,7 +326,11 @@ def get_asr(audio_filename):
 
     # Make the POST request
     response = requests.post(url, headers=headers, files=files)
-    return response.text
+    output = response.text.rstrip()
+    if output == "Thank you." or output == "Bye.":
+        return ""
+    else:
+        return output
 
 # ++++++++++++++ Local deployed models with TGI>=1.4 ++++++++++++++++++++++
     
@@ -362,7 +395,8 @@ def tgi_textGen(option, prompt, max_token, temperature, top_p, top_k):
     chain = c_prompt | llm | output_parser
     return chain.invoke({"input": prompt})
 
-def tgi_textGen_agent(option, text_embedding_model, prompt, max_token, temperature, top_p, top_k):
+
+def tgi_textGen_memory(option, text_embedding_model, prompt, max_token, temperature, top_p, top_k):
     tgi_llm = HuggingFaceTextGenInference(
         inference_server_url=option,
         max_new_tokens=max_token,
@@ -406,52 +440,7 @@ def tgi_textGen_agent(option, text_embedding_model, prompt, max_token, temperatu
     )
     
     print(f'rephrased:{rephrase_the_question}')
-    
-    '''
-    # REtrieve from aoss
-    if text_embedding_model == 'titan':
-        text_embedding = BedrockEmbeddings(client=boto3_bedrock, model_id='amazon.titan-embed-text-v1')
-    elif text_embedding_model == 'openai':
-        text_embedding =  OpenAIEmbeddings(openai_api_key=os.getenv('openai_api_token'))
-    elif text_embedding_model == 'hf-tei':
-        text_embedding = HuggingFaceHubEmbeddings(model='http://infs.cavatar.info:8084')
-        
-    vectorstore = OpenSearchVectorSearch(index_name=collection_name, 
-                                      embedding_function=text_embedding, 
-                                      opensearch_url=aoss_host,
-                                      http_auth=auth,
-                                      timeout = 100,
-                                      use_ssl = True,
-                                      verify_certs = True,
-                                      connection_class = RequestsHttpConnection,
-                                      is_aoss=True,
-                                     )
-    retriever = vectorstore.as_retriever()  
-    #run the RAG pipeline
-    retrieve_documents = {  
-        "docs": itemgetter("standalone_question") | retriever,  
-        "question": itemgetter("standalone_question"),  
-    }
 
-    # We ask the LLM: “Taking the retrieved documents as reference (and — optionally — the conversation so far), what would be your response to the user’s latest question?”
-    def _combine_documents(docs):  
-        prompt = PromptTemplate.from_template(template="{page_content}")  
-        doc_strings = [format_document(doc, prompt) for doc in docs]  
-        return "\n\n".join(doc_strings)
-
-    compose_the_final_answer = (  
-        {  
-            "context": lambda x: _combine_documents(x["docs"]),  
-            "question": itemgetter("question"),  
-        }  
-        | ChatPromptTemplate.from_template(  
-            """You're a personal assistant.  
-            With the context below:  
-            {context}  
-            To the question "{question}", you answer:""")  
-        | tgi_llm  
-    )
-    '''
 
     # append the final response to the chat history
     final_chain = (  
@@ -585,19 +574,21 @@ with st.sidebar:
     ##record_audio=mic_recorder(start_prompt="▶️ ", stop_prompt="⏹️" ,key='recorder')
 
     #st.divider()
+    st.header(':green[Enable Agent with voice] :loud_sound:')
     record_audio=audiorecorder(start_prompt="Voice input start:  ▶️ ", stop_prompt="Record stop: ⏹️", pause_prompt="", key=None)
     if len(record_audio)>3:
         record_audio_bytes = record_audio.export().read()
         st.audio(record_audio_bytes, format="audio/wav")#, start_time=0, *, sample_rate=None)
         record_audio.export(temp_audio_file, format="mp3")
         voice_prompt = get_asr(temp_audio_file)
+        record_audio.empty()
     #    segments, info = model.transcribe(temp_audio_file)
     #    for segment in segments:
     #        voice_prompt += segment.text+', '
     #        voice_prompt = voice_prompt[:-2]
         if os.path.exists(temp_audio_file):
             os.remove(temp_audio_file)
-    st.caption("Press space and hit ↩️ for voice input")
+    st.caption("Press space and hit ↩️ for voice & agent activation")
     st.divider()
 
     if st.button("Clear Chat History"):
@@ -711,13 +702,13 @@ elif rag_on:
         st.session_state.messages.append({"role": "assistant", "content": msg})
         st.chat_message("ai", avatar="📄").write(msg)
 
-elif record_audio:
+elif (record_audio and len(voice_prompt) > 1):
     if prompt := st.chat_input(placeholder=voice_prompt, on_submit=None, key="user_input"):
         prompt=voice_prompt if prompt==' ' else prompt
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.chat_message("user").write(prompt)
         if option == "anthropic.claude-v2:1":
-            msg=bedrock_textGen(option, prompt, max_token, temperature, top_p, top_k, stop_sequences)
+            msg=bedrock_textGen_agent(option, prompt, max_token, temperature, top_p, top_k, stop_sequences)
             my_avatar="⚓️"
         elif option == "gemini-pro":
             response=st.session_state.chat.send_message(prompt,stream=True,generation_config = gen_config)
@@ -726,7 +717,7 @@ elif record_audio:
             my_avatar="🌎"
         elif option == "gpt-4-1106-preview":
             my_avatar="🛟"
-            msg=textGen(option, prompt, max_token, temperature, top_p)
+            msg=textGen_agent(option, prompt, max_token, temperature, top_p)
         elif option == "mistral-7b":
             msg=tgi_textGen('http://infs.cavatar.info:8080', prompt, max_token, temperature, top_p, top_k)
             my_avatar="🏄‍♂️"
@@ -743,7 +734,7 @@ elif record_audio:
         else:
             msg = "Please choose a correct model."
             my_avatar="😇"
-        msg += "\n\n✒︎Content created by using: " + option
+        msg += "\n\n✒︎Content created by using: LangChain Agent and " + option
         st.session_state.messages.append({"role": "assistant", "content": msg})
         st.chat_message("ai", avatar=my_avatar).write(msg)
 
