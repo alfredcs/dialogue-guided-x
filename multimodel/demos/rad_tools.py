@@ -328,14 +328,14 @@ def tgi_textGen(option, prompt, max_token, temperature, top_p, top_k):
         temperature=temperature,
         repetition_penalty=1.13,
     )
-
     c_prompt = ChatPromptTemplate.from_messages([
         ("system", "You are a world class knowledge expert and able to answer any question as a seasoned assistant."),
         ("user", "{input}")
     ])
     output_parser = StrOutputParser()
     chain = c_prompt | llm | output_parser
-    return chain.invoke({"input": prompt})
+    output = chain.invoke({"input": prompt})
+    return output.strip().replace('Assistant:', '')
 
 
 def tgi_textGen_memory(option, text_embedding_model, prompt, max_token, temperature, top_p, top_k):

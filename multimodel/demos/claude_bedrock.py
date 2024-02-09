@@ -19,6 +19,17 @@ from langchain.tools import DuckDuckGoSearchResults
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain_community.chat_models import BedrockChat
 from langchain.agents import initialize_agent, AgentType
+#from langchain import FewShotPromptTemplate
+
+## Rewrite
+from langchain import hub
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+#from langchain_core.prompts import ChatPromptTemplate
+from langchain.prompts import (
+    ChatPromptTemplate,
+    FewShotChatMessagePromptTemplate,
+)
 
 module_path = ".."
 sys.path.append(os.path.abspath(module_path))
@@ -174,7 +185,7 @@ def bedrock_textGen_agent(model_id, prompt, max_tokens, temperature, top_p, top_
         client=boto3_bedrock,
         model_kwargs=inference_modifier,
     )
-    
+
     ## Using Dickduckgo as search engine
     wrapper = DuckDuckGoSearchAPIWrapper(region="wt-wt", safesearch='Moderate', time=None, max_results=3)
     duckduckgo_search = DuckDuckGoSearchRun()
@@ -306,3 +317,79 @@ def bedrock_llm(model_id, max_tokens, temperature):
     )
     answer = qa({"query": query})
     return answewr['result']
+
+
+def prompt_rewrite(distracted_query, temperature, top_p, max_len):
+    bedrock_client = get_bedrock_client(region)
+    inference_modifier = {
+        #"max_tokens_to_sample": 512,
+        "max_gen_len": max_len,
+        "temperature": temperature,
+        #"top_k": 0.85,
+        "top_p": top_p,
+    }
+    
+    bedrock_model = Bedrock(
+        model_id="meta.llama2-70b-chat-v1",
+        client=bedrock_client,
+        model_kwargs=inference_modifier,
+    )
+
+    chat_llm = BedrockChat(
+            model_id="meta.llama2-70b-chat-v1", client=boto3_bedrock, model_kwargs={"max_tokens_to_sample":max_len, "temperature":temperature, "top_p": top_p}
+        )
+
+    # create our examples
+    examples = [
+        {
+            "input": "A cat sitting on a windowsill.",
+            "output": "Imagine a cozy, sunlit room, with sheer curtains gently swaying in the breeze. On the wooden windowsill, there's a fluffy, ginger tabby cat lounging lazily. The cat's green eyes are half-closed, basking in the warm sunlight filtering through the window, casting a soft glow on its fur. Potted plants are placed around the windowsill, adding a touch of greenery to the serene scene."
+        }, {
+            "input": "A futuristic cityscape at night.",
+            "output": "Envision a sprawling futuristic cityscape under the cloak of night, illuminated by the neon glow of skyscrapers. Hover cars zip through the skyways, leaving trails of light in their wake. The architecture is a blend of high-tech structures and eco-friendly green buildings with vertical gardens. In the sky, a giant hologram advertisement plays, reflecting off the glossy surface of a nearby tower, while the moon looms large in the starry sky."
+        }, {
+            "input": "A medieval knight on a quest.",
+            "output": "Picture a valiant medieval knight, clad in shining armor, embarking on a noble quest through an ancient forest. The knight rides a majestic, well-armored steed. The dense forest is shrouded in mist, with rays of sunlight piercing through the canopy, creating a mystical ambiance. The knight holds aloft a banner with a crest symbolizing their noble cause, and in the background, an imposing, mysterious castle can be seen atop a distant hill, its flags fluttering in the wind."
+        }
+    ]
+    
+    # This is a prompt template used to format each individual example.
+    example_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("human", "{input}"),
+            ("ai", "{output}"),
+        ]
+    )
+
+    # now break our previous prompt into a prefix and suffix
+    # the prefix is our instructions
+    prefix = """Your role as an expert prompt engineer involves meticulously refining the input text, transforming it into a detailed and enriched prompt. This refined prompt is destined for a text-to-image generation model. Your primary objective is to maintain the core semantic essence of the original text while infusing it with rich, descriptive elements. Such detailed guidance is crucial for steering the image generation model towards producing images of superior quality, characterized by their vivid and expressive visual nature. Your adeptness in prompt crafting is instrumental in ensuring that the final images not only captivate visually but also resonate deeply with the original textual concept. Here are some examples: 
+    """
+
+    # now create the few shot prompt template
+    few_shot_prompt = FewShotChatMessagePromptTemplate(
+        examples=examples,
+        example_prompt=example_prompt,
+        #prefix=prefix,
+        #suffix=suffix,
+        #input_variables=["query"],
+        #example_separator="\n\n****"
+    )
+
+    final_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", prefix),
+            few_shot_prompt,
+            ("human", "{input}"),
+        ]
+    )
+
+    output_parser = StrOutputParser()
+    chain = final_prompt | bedrock_model | output_parser
+
+    return chain.invoke({"input": distracted_query})
+    
+
+if __name__ == "__main__":
+    response = prompt_rewrite("A man walks his dog toward the camera in a park.", 0.5, 0.85, 512)
+    print(response)
